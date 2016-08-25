@@ -1,6 +1,7 @@
 module Main where
 import Text.ParserCombinators.Parsec
 import Data.Char (digitToInt, chr)
+import Text.Parsec.Pos (newPos)
 
 data JValue = JNum Double
             | JString String
@@ -8,13 +9,14 @@ data JValue = JNum Double
             | JNull
             | JArr [JValue]
             | JObj [(String, JValue)]
+            deriving (Eq, Show)
 
 data JToken = Comma | BrktL | BrktR | BrcL | BrcR | Colon | StringT String | NumT Double | BoolT Bool | NullT
               deriving (Eq, Show)
 
 symbol :: JToken -> String -> GenParser Char st JToken
 symbol tok c = do
-  _ <- string c
+  string c
   return tok
 
 commaT = symbol Comma ","
@@ -49,9 +51,9 @@ escapes = do
 
 stringT :: GenParser Char st JToken
 stringT = do
-  _ <- char '"'
+  char '"'
   s <- many (escapes <|> (noneOf ['\\', '\"']))
-  _ <- char '"'
+  char '"'
   return $ StringT s
 
 numT :: GenParser Char st JToken
@@ -62,11 +64,11 @@ numT = do
                              ds <- many digit
                              return (d:ds)))
   fracp <- option "" (do
-                        _ <- char '.'
+                        char '.'
                         ds <- many1 digit
                         return $ "." ++ ds)
   exp <- option "" (do
-                        _ <- oneOf "eE"
+                        oneOf "eE"
                         sgn <- option "" (string "+" <|> string "-")
                         ds <- many1 digit
                         return $ "e" ++ sgn ++ ds)
@@ -75,22 +77,69 @@ numT = do
 jtoken :: GenParser Char st JToken
 jtoken = do
   tok <- (numT <|> stringT <|> commaT <|> brktlT <|> brktrT <|> brclT <|> brcrT <|> colonT <|> nullT <|> trueT <|> falseT)
-  _ <- spaces
+  spaces
   return tok
 
-tokenize :: GenParser Char st [JToken]
-tokenize = do
-  _ <- spaces
+tokenParser :: GenParser Char st [JToken]
+tokenParser = do
+  spaces
   tokens <- many jtoken
   eof
   return tokens
 
-parseJValue :: String -> JValue
-parseJValue = undefined
+jtok :: (JToken -> Maybe a) -> GenParser JToken st a
+jtok f = token
+  (\t -> show t)
+  (\t -> newPos "<null>" 0 0)
+  f
+
+jsym :: JToken -> GenParser JToken st ()
+jsym tok = jtok (\t -> if t == tok then Just () else Nothing)
+
+jString = jtok (\t -> case t of
+                   (StringT s) -> Just (JString s)
+                   _ -> Nothing)
+
+jNum = jtok (\t -> case t of
+                (NumT n) -> Just (JNum n)
+                _ -> Nothing)
+
+jBool = jtok (\t -> case t of
+                 (BoolT v) -> Just (JBool v)
+                 _ -> Nothing)
+
+jNull = jtok (\t -> case t of
+                 NullT -> Just JNull
+                 _ -> Nothing)
+
+jArray :: GenParser JToken st JValue
+jArray = do
+  jsym BrktL
+  vals <- jValue `sepBy` jsym Comma
+  jsym BrktR
+  return $ JArr vals
+
+jObject :: GenParser JToken st JValue
+jObject = do
+  jsym BrcL
+  let kvPair = (do
+                   (JString s) <- jString
+                   jsym Colon
+                   v <- jValue
+                   return (s, v))
+  vals <- kvPair `sepBy` jsym Comma
+  jsym BrcR
+  return $ JObj vals
+
+jValue :: GenParser JToken st JValue
+jValue = jNum <|> jString <|> jBool <|> jNull <|> jArray <|> jObject
+
+parseJValue :: String -> Either ParseError JValue
+parseJValue s = (parse tokenParser "" s) >>= (parse jValue "")
 
 printJValue :: JValue -> String
 printJValue = undefined
 
 main :: IO ()
 main = do
-  putStrLn $ show . (parse tokenize "") $ "{ \"Hello,\": \"\\u4598\\n\", \"foo\": [3, 6.9e4, 9] }"
+  putStrLn $ show . parseJValue $ "{ \"Hello,\": \"\\u4598\\n\", \"foo\": [3, 6.9e4, 9] }"
